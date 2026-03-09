@@ -1,4 +1,4 @@
-package org.example.com.terminal
+package com.terminal
 
 class TerminalBuffer {
 }
