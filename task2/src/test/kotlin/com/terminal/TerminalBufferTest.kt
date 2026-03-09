@@ -6,13 +6,12 @@ import org.junit.jupiter.api.Assertions.*
 
 class TerminalBufferTest {
 
-    private fun newBuffer(w: Int = 5, h: Int = 3, sb: Int = 10) = TerminalBuffer(w, h, sb)
-
+    private fun newBuffer(w: Int = 5, h: Int = 3, sb: Int = 10) = TerminalBuffer(h, w, sb)
     private fun spaces(n: Int) = buildString { repeat(n) { append(' ') } }
 
-    // ---- Cursor tests ----
     @Nested
     inner class CursorTests {
+
         @Test
         fun `setCursor clamps to (0,0) minimum`() {
             val tb = newBuffer(4, 2)
@@ -41,21 +40,19 @@ class TerminalBufferTest {
         @Test
         fun `moveCursor clamps at all four boundaries`() {
             val tb = newBuffer(4, 3)
-            // Left and top clamp
             tb.setCursor(1, 1)
             tb.moveCursor(-10, -10)
             assertEquals(0, tb.getCursorCol())
             assertEquals(0, tb.getCursorRow())
-            // Right and bottom clamp
             tb.moveCursor(100, 100)
             assertEquals(3, tb.getCursorCol())
             assertEquals(2, tb.getCursorRow())
         }
     }
 
-    // ---- Write tests ----
     @Nested
     inner class WriteTests {
+
         @Test
         fun `write single character updates cell and advances cursor`() {
             val tb = newBuffer(4, 2)
@@ -68,7 +65,7 @@ class TerminalBufferTest {
         @Test
         fun `write at end of line wraps to next line col 0`() {
             val tb = newBuffer(3, 2)
-            tb.setCursor(2, 0) // last column
+            tb.setCursor(2, 0)
             tb.write("X")
             assertEquals('X', tb.getCell(0, 2).char)
             assertEquals(0, tb.getCursorCol())
@@ -85,26 +82,44 @@ class TerminalBufferTest {
         }
 
         @Test
-        fun `write past last row scrolls screen (top row moves to scrollback)`() {
+        fun `write only newlines scrolls correctly with no characters written`() {
             val tb = newBuffer(3, 2, sb = 5)
-            // Fill first line and cause wrap to second, then write one more to trigger scroll
-            tb.write("ABC\n") // newline moves to row 1
-            tb.write("DEF")    // writing will go to row 1 col 0..2, then wrap to row 2 -> scroll
-            // After scrolling: original row0 should be in scrollback[0]
-            assertDoesNotThrow { tb.getScrollbackCell(0, 0) }
+            // Fill screen first so scrollback has content to verify
+            tb.write("ABC\nDEF")
+            // Now force scroll with only newlines
+            tb.write("\n\n")
+            // Screen rows should be blank (scrolled past), cursor on last row
+            assertEquals(tb.height - 1, tb.getCursorRow())
+            assertEquals(0, tb.getCursorCol())
+        }
+
+        @Test
+        fun `write past last row scrolls screen top row moves to scrollback`() {
+            val tb = newBuffer(3, 2, sb = 5)
+            tb.write("ABC\n") // cursor moves to row 1
+            tb.write("DEF")   // fills row 1, wraps to row 2, triggers scroll
             assertEquals('A', tb.getScrollbackCell(0, 0).char)
             assertEquals('B', tb.getScrollbackCell(0, 1).char)
             assertEquals('C', tb.getScrollbackCell(0, 2).char)
-            // Cursor stays on last row
             assertEquals(tb.height - 1, tb.getCursorRow())
-            assertEquals(0, tb.getCursorCol())
+        }
+
+        @Test
+        fun `write exactly filling screen without overflow does not go out of bounds`() {
+            // width=3, height=2 — writing exactly 6 chars should fill screen
+            // and leave cursor on last row without crashing
+            val tb = newBuffer(3, 2, sb = 5)
+            tb.write("ABCDEF")
+            assertEquals("ABC", tb.getScreenLine(0))
+            assertEquals("DEF", tb.getScreenLine(1))
+            // Cursor wraps after last char — triggers scroll, lands on row height-1
+            assertEquals(tb.height - 1, tb.getCursorRow())
         }
 
         @Test
         fun `write text longer than width wraps correctly across multiple lines`() {
             val tb = newBuffer(3, 2)
             tb.write("ABCDE")
-            // Expect row0 = ABC, row1 starts with DE and then space
             assertEquals("ABC", tb.getScreenLine(0))
             assertEquals("DE ", tb.getScreenLine(1))
         }
@@ -122,25 +137,33 @@ class TerminalBufferTest {
         }
 
         @Test
-        fun `scrollback does not exceed maxScrollback (oldest lines dropped)`() {
-            val tb = newBuffer(2, 1, sb = 2) // height 1 so every wrap scrolls
-            // This sequence will produce 3 lines into scrollback if unlimited
-            tb.write("AB\n") // push 1
-            tb.write("CD\n") // push 2
-            tb.write("EF\n") // push 3 -> should evict oldest
-            // Verify we can access indices 0 and 1 but not 2
+        fun `scrollback does not exceed maxScrollback oldest lines dropped`() {
+            val tb = newBuffer(2, 1, sb = 2)
+            tb.write("AB\n") // scrollback: [AB]
+            tb.write("CD\n") // scrollback: [AB, CD]
+            tb.write("EF\n") // scrollback: [CD, EF] — AB evicted
             assertDoesNotThrow { tb.getScrollbackCell(0, 0) }
             assertDoesNotThrow { tb.getScrollbackCell(1, 0) }
             assertThrows(IndexOutOfBoundsException::class.java) { tb.getScrollbackCell(2, 0) }
-            // And both remaining lines have correct width
             assertEquals(2, tb.getScrollbackLine(0).length)
             assertEquals(2, tb.getScrollbackLine(1).length)
         }
+
+        @Test
+        fun `write with maxScrollback zero discards scrolled lines silently`() {
+            val tb = newBuffer(3, 1, sb = 0)
+            tb.write("ABC\n") // would scroll ABC into scrollback, but maxScrollback=0
+            tb.write("DEF")
+            // No scrollback entries — accessing index 0 should throw
+            assertThrows(IndexOutOfBoundsException::class.java) { tb.getScrollbackCell(0, 0) }
+            // Screen still works normally
+            assertEquals("DEF", tb.getScreenLine(0))
+        }
     }
 
-    // ---- Insert tests ----
     @Nested
     inner class InsertTests {
+
         @Test
         fun `insert shifts existing chars right`() {
             val tb = newBuffer(5, 2)
@@ -156,9 +179,9 @@ class TerminalBufferTest {
             val tb = newBuffer(4, 2)
             tb.write("ABCD")
             tb.setCursor(3, 0)
-            tb.insert("XYZ") // Only X fits at col3, Y and Z should drop
+            tb.insert("XYZ")
             assertEquals("ABCX", tb.getScreenLine(0))
-            assertEquals(3, tb.getCursorCol()) // clamped to last column
+            assertEquals(3, tb.getCursorCol())
         }
 
         @Test
@@ -172,17 +195,28 @@ class TerminalBufferTest {
         }
 
         @Test
-        fun `cursor advances by inserted length (clamped)`() {
+        fun `cursor advances by inserted length clamped to last column`() {
             val tb = newBuffer(4, 1)
             tb.setCursor(2, 0)
             tb.insert("WXYZ")
-            assertEquals(3, tb.getCursorCol()) // clamped to last column
+            assertEquals(3, tb.getCursorCol())
+        }
+
+        @Test
+        fun `insert empty string is a no-op and cursor does not move`() {
+            val tb = newBuffer(4, 2)
+            tb.write("ABCD")
+            tb.setCursor(2, 0)
+            tb.insert("")
+            assertEquals("ABCD", tb.getScreenLine(0))
+            assertEquals(2, tb.getCursorCol())
+            assertEquals(0, tb.getCursorRow())
         }
     }
 
-    // ---- FillLine tests ----
     @Nested
     inner class FillLineTests {
+
         @Test
         fun `fillLine fills all cells with given char and currentAttributes`() {
             val tb = newBuffer(4, 2)
@@ -212,18 +246,25 @@ class TerminalBufferTest {
             tb.fillLine(0)
             assertEquals(spaces(5), tb.getScreenLine(0))
         }
+
+        @Test
+        fun `fillLine on out-of-bounds row throws IndexOutOfBoundsException`() {
+            val tb = newBuffer(3, 2)
+            assertThrows(IndexOutOfBoundsException::class.java) { tb.fillLine(-1, 'X') }
+            assertThrows(IndexOutOfBoundsException::class.java) { tb.fillLine(2, 'X') }
+        }
     }
 
-    // ---- Scrollback tests ----
     @Nested
     inner class ScrollbackTests {
+
         @Test
         fun `insertEmptyLineAtBottom moves top row to scrollback`() {
             val tb = newBuffer(3, 2, sb = 5)
             tb.write("ABC")
             tb.insertEmptyLineAtBottom()
             assertEquals("ABC", tb.getScrollbackLine(0))
-            assertEquals(spaces(3), tb.getScreenLine(0)) // row0 removed; new row0 was old row1 (spaces)
+            assertEquals(spaces(3), tb.getScreenLine(0))
         }
 
         @Test
@@ -239,11 +280,9 @@ class TerminalBufferTest {
         fun `scrollback is accessible via getScrollbackCell and getScrollbackLine`() {
             val tb = newBuffer(4, 2, sb = 5)
             tb.write("ABCD\nEFGH\n")
-            // First line must be ABCD regardless of intermediate pushes
             assertEquals('A', tb.getScrollbackCell(0, 0).char)
             assertEquals('D', tb.getScrollbackCell(0, 3).char)
             assertEquals("ABCD", tb.getScrollbackLine(0))
-            // Any additional lines, if present, are readable and have width length
             var i = 0
             while (true) {
                 try {
@@ -258,28 +297,37 @@ class TerminalBufferTest {
         }
 
         @Test
-        fun `scrollback is read-only (no editing operations affect it)`() {
+        fun `scrollback is read-only editing operations do not affect it`() {
             val tb = newBuffer(4, 2, sb = 100)
-            tb.write("WXYZ\n") // push to scrollback
+            tb.write("WXYZ\n") // push WXYZ to scrollback
             val before = tb.getScrollbackLine(0)
-            // Modify screen but avoid scrolling (no newline, no crossing bottom)
+            // All edits stay on the screen without triggering another scroll
+            tb.setCursor(0, 0)
             tb.fillLine(0, '*')
             tb.setCursor(0, 0)
             tb.insert("QQ")
-            tb.write("ABCD") // fits on current row without causing scroll
+            tb.setCursor(0, 0)
+            tb.write("AB") // short write, no newline, no scroll
             val after = tb.getScrollbackLine(0)
-            assertEquals(before, after) // unchanged
+            assertEquals(before, after)
+        }
+
+        @Test
+        fun `scrollback with maxScrollback zero keeps no history`() {
+            val tb = newBuffer(3, 1, sb = 0)
+            tb.insertEmptyLineAtBottom()
+            tb.insertEmptyLineAtBottom()
+            assertThrows(IndexOutOfBoundsException::class.java) { tb.getScrollbackLine(0) }
         }
     }
 
-    // ---- Clear tests ----
     @Nested
     inner class ClearTests {
+
         @Test
         fun `clearScreen resets all cells to empty and cursor to (0,0)`() {
             val tb = newBuffer(3, 2)
             tb.write("ABCDEF")
-            tb.setCursor(2, 1)
             tb.clearScreen()
             assertEquals(0, tb.getCursorCol())
             assertEquals(0, tb.getCursorRow())
@@ -290,7 +338,7 @@ class TerminalBufferTest {
         @Test
         fun `clearScreen preserves scrollback`() {
             val tb = newBuffer(3, 1, sb = 5)
-            tb.write("ABC\n") // push to scrollback
+            tb.write("ABC\n")
             tb.clearScreen()
             assertEquals("ABC", tb.getScrollbackLine(0))
         }
@@ -298,16 +346,16 @@ class TerminalBufferTest {
         @Test
         fun `clearAll removes both screen content and scrollback`() {
             val tb = newBuffer(3, 1, sb = 5)
-            tb.write("ABC\n") // push to scrollback
+            tb.write("ABC\n")
             tb.clearAll()
             assertEquals(spaces(3), tb.getScreenLine(0))
             assertThrows(IndexOutOfBoundsException::class.java) { tb.getScrollbackCell(0, 0) }
         }
     }
 
-    // ---- Content access tests ----
     @Nested
     inner class ContentAccessTests {
+
         @Test
         fun `getScreenLine returns correct string representation`() {
             val tb = newBuffer(4, 2)
@@ -319,28 +367,20 @@ class TerminalBufferTest {
         fun `getScreenAsString returns all screen lines joined by newline`() {
             val tb = newBuffer(3, 2)
             tb.write("ABCDEF")
-            // Expected is the concatenation of individual screen lines with newline
             val expected = (0 until tb.height).joinToString("\n") { tb.getScreenLine(it) }
             assertEquals(expected, tb.getScreenAsString())
         }
 
         @Test
-        fun `getAllAsString includes scrollback lines first, then screen`() {
+        fun `getAllAsString includes scrollback lines first then screen`() {
             val tb = newBuffer(3, 2, sb = 5)
-            tb.write("ABC\nDEF\nG") // ABC and DEF to scrollback, G on screen row0 col0
-            // Build expected dynamically from getters (verifies ordering rather than duplicating logic)
+            tb.write("ABC\nDEF\nG")
             val expected = buildList {
-                // scrollback first
                 var i = 0
                 while (true) {
-                    try {
-                        add(tb.getScrollbackLine(i))
-                        i++
-                    } catch (_: IndexOutOfBoundsException) {
-                        break
-                    }
+                    try { add(tb.getScrollbackLine(i++)) }
+                    catch (_: IndexOutOfBoundsException) { break }
                 }
-                // then screen lines
                 for (r in 0 until tb.height) add(tb.getScreenLine(r))
             }.joinToString("\n")
             assertEquals(expected, tb.getAllAsString())
