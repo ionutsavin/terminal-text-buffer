@@ -1,9 +1,14 @@
 package com.terminal
 
 /**
- * Represents a terminal screen buffer with scrollback history.
- * This class currently supports only cursor/attribute operations and content accessors.
- * Writing/editing operations will be added later.
+ * Represents an in-memory terminal screen buffer with scrollback history.
+ *
+ * The buffer maintains a fixed-size visible screen (height x width) and an optional
+ * scrollback history of immutable lines (up to `maxScrollback`). It supports cursor
+ * movement, attribute selection, basic editing operations (write/insert/fill),
+ * clearing, resizing, and read-only content accessors.
+ *
+ * Note: All operations are synchronous and in-memory; no I/O occurs here.
  */
 class TerminalBuffer(
     var height: Int,
@@ -29,22 +34,36 @@ class TerminalBuffer(
 
     // ---- Attributes ----
 
+    /**
+     * Sets the attributes that will be applied to subsequently written cells.
+     * The change does not modify existing cells, only future writes.
+     */
     fun setAttributes(fg: TerminalColor, bg: TerminalColor, styles: Set<TextStyle>) {
         currentAttributes = CellAttributes(foreground = fg, background = bg, styles = styles.toSet())
     }
 
     // ---- Cursor ----
 
+    /** Returns the current cursor column (zero-indexed within the visible screen). */
     fun getCursorCol(): Int = cursor.col
 
+    /** Returns the current cursor row (zero-indexed within the visible screen). */
     fun getCursorRow(): Int = cursor.row
 
+    /**
+     * Positions the cursor within the visible screen, clamping to valid bounds.
+     * Out-of-range inputs are moved to the nearest valid cell; no exception is thrown.
+     */
     fun setCursor(col: Int, row: Int) {
         val clampedCol = col.coerceIn(0, (width - 1).coerceAtLeast(0))
         val clampedRow = row.coerceIn(0, (height - 1).coerceAtLeast(0))
         cursor = CursorPosition(clampedCol, clampedRow)
     }
 
+    /**
+     * Moves the cursor by the given deltas relative to its current position, with clamping.
+     * Negative values move left/up; positive values move right/down.
+     */
     fun moveCursor(cols: Int, rows: Int) {
         setCursor(cursor.col + cols, cursor.row + rows)
     }
@@ -52,8 +71,9 @@ class TerminalBuffer(
     // ---- Editing operations ----
 
     /**
-     * Write characters one by one starting at the cursor using currentAttributes.
-     * Handles newlines, wrapping, and scrolling with scrollback.
+     * Writes the provided text starting at the current cursor position using the current attributes.
+     * Newlines move the cursor to column 0 of the next row; writing past the bottom scrolls the screen
+     * and appends scrolled lines to scrollback (subject to `maxScrollback`).
      */
     fun write(text: String) {
         if (text.isEmpty()) return
@@ -101,8 +121,9 @@ class TerminalBuffer(
     }
 
     /**
-     * Insert characters at the cursor position on the current screen row only.
-     * Shifts existing characters to the right; drops overflow; advances cursor by inserted length.
+     * Inserts the given text at the current cursor position on the active screen row only.
+     * Existing characters on the row shift right; overflow beyond the last column is dropped.
+     * The cursor advances by the number of inserted characters (clamped to the last column).
      */
     fun insert(text: String) {
         if (text.isEmpty()) return
@@ -138,8 +159,8 @@ class TerminalBuffer(
     }
 
     /**
-     * Fill every cell on the given screen row with ch using currentAttributes.
-     * Does not move the cursor.
+     * Fills every cell on the specified screen row with the given character using current attributes.
+     * The cursor position is not changed.
      */
     fun fillLine(row: Int, ch: Char = ' ') {
         checkRowIndex(row)
@@ -149,9 +170,8 @@ class TerminalBuffer(
     }
 
     /**
-     * Push top screen row into scrollback (respecting maxScrollback),
-     * shift screen rows up by one, and add a new empty row at the bottom.
-     * Does not move the cursor.
+     * Pushes the current top screen row into scrollback, shifts the screen up by one row,
+     * and adds a new empty row at the bottom. The cursor position is not changed.
      */
     fun insertEmptyLineAtBottom() {
         if (height <= 0) return
@@ -160,7 +180,8 @@ class TerminalBuffer(
     }
 
     /**
-     * Reset all screen cells to Cell.EMPTY and cursor to (0,0). Does not touch scrollback.
+     * Clears the visible screen to empty cells and moves the cursor to (0,0).
+     * Scrollback history is not modified.
      */
     fun clearScreen() {
         for (r in 0 until height) {
@@ -172,6 +193,10 @@ class TerminalBuffer(
     /**
      * Clear screen and also clear the entire scrollback.
      */
+    /**
+     * Clears the visible screen and removes all scrollback history.
+     * After this call the buffer is visually empty and cursor is at (0,0).
+     */
     fun clearAll() {
         clearScreen()
         scrollback.clear()
@@ -180,13 +205,10 @@ class TerminalBuffer(
     // ---- Resizing ----
 
     /**
-     * Resize the buffer's visible screen (width x height) and adjust scrollback rows' width.
-     * Strategy:
-     * - If width changes: truncate or pad each screen row and each scrollback row to newWidth.
-     * - If height shrinks: move excess top screen rows into scrollback (oldest first), then trim the screen.
-     * - If height grows: append empty rows at the bottom.
-     * - Clamp cursor within the new bounds.
-     * - Scrollback overflow rules still apply after resize.
+     * Resizes the visible screen to the given dimensions and adjusts stored rows accordingly.
+     * - Rows in both screen and scrollback are truncated or padded to the new width.
+     * - Shrinking height moves excess top screen rows into scrollback; growing height adds empty rows.
+     * - The cursor is clamped within the new bounds. Scrollback capacity limits still apply.
      */
     fun resize(newWidth: Int, newHeight: Int) {
         val targetWidth = newWidth.coerceAtLeast(0)
@@ -218,10 +240,7 @@ class TerminalBuffer(
                     scrollback.add(snapshot)
                 }
                 // Enforce maxScrollback capacity
-                if (scrollback.size > maxScrollback) {
-                    val excess = scrollback.size - maxScrollback
-                    repeat(excess) { scrollback.removeAt(0) }
-                }
+                enforceScrollbackCapacity()
             }
             // Trim the screen's top rows
             repeat(moveCount) {
@@ -245,10 +264,7 @@ class TerminalBuffer(
             if (maxScrollback > 0 && screen.isNotEmpty()) {
                 val snapshot = screen.first().toList()
                 scrollback.add(snapshot)
-                if (scrollback.size > maxScrollback) {
-                    val excess = scrollback.size - maxScrollback
-                    repeat(excess) { scrollback.removeAt(0) }
-                }
+                enforceScrollbackCapacity()
             }
             if (screen.isNotEmpty()) screen.removeAt(0) else break
         }
@@ -259,6 +275,7 @@ class TerminalBuffer(
         cursor = CursorPosition(clampedCol, clampedRow)
     }
 
+    // Returns a resized copy of a mutable screen row, truncating or padding with EMPTY cells.
     private fun resizeMutableRow(row: MutableList<Cell>, newWidth: Int): MutableList<Cell> {
         return when {
             newWidth <= 0 -> mutableListOf()
@@ -273,6 +290,7 @@ class TerminalBuffer(
         }
     }
 
+    // Returns a resized copy of an immutable row for scrollback, truncating or padding with EMPTY cells.
     private fun resizeImmutableRow(row: List<Cell>, newWidth: Int): List<Cell> {
         return when {
             newWidth <= 0 -> emptyList()
@@ -289,32 +307,55 @@ class TerminalBuffer(
 
     // ---- Content access ----
 
+    /**
+     * Returns the cell at the given screen coordinates.
+     * Row 0 is the top of the visible screen. Throws IndexOutOfBoundsException if out of bounds.
+     */
     fun getCell(row: Int, col: Int): Cell {
         checkRowIndex(row)
         checkColIndex(col)
         return screen[row][col]
     }
 
+    /**
+     * Returns the cell from scrollback at the given row and column.
+     * Row 0 is the oldest scrollback line. Throws IndexOutOfBoundsException if out of bounds.
+     */
     fun getScrollbackCell(scrollbackRow: Int, col: Int): Cell {
         if (scrollbackRow !in 0 until scrollback.size) throw IndexOutOfBoundsException("scrollbackRow=$scrollbackRow size=${scrollback.size}")
         checkColIndex(col)
         return scrollback[scrollbackRow][col]
     }
 
+    /**
+     * Returns the characters of the specified screen row as a String.
+     * Row 0 is the top of the visible screen. Throws IndexOutOfBoundsException if out of bounds.
+     */
     fun getScreenLine(row: Int): String {
         checkRowIndex(row)
         return screen[row].asSequence().map { it.char }.joinToString("")
     }
 
+    /**
+     * Returns the characters of the specified scrollback row as a String.
+     * Row 0 is the oldest line in scrollback. Throws IndexOutOfBoundsException if out of bounds.
+     */
     fun getScrollbackLine(row: Int): String {
         if (row !in 0 until scrollback.size) throw IndexOutOfBoundsException("scrollbackRow=$row size=${scrollback.size}")
         return scrollback[row].asSequence().map { it.char }.joinToString("")
     }
 
+    /**
+     * Returns the entire visible screen as lines joined with a newline character.
+     * Lines are ordered from top (row 0) to bottom (row height-1).
+     */
     fun getScreenAsString(): String {
         return screen.asSequence().map { row -> row.asSequence().map { it.char }.joinToString("") }.joinToString("\n")
     }
 
+    /**
+     * Returns all content as lines joined by newline: scrollback first (oldest to newest), then the screen.
+     */
     fun getAllAsString(): String {
         val allLines = buildList {
             addAll(scrollback.asSequence().map { row -> row.asSequence().map { it.char }.joinToString("") })
@@ -325,27 +366,34 @@ class TerminalBuffer(
 
     // ---- Helpers ----
 
+    /** Ensures scrollback size does not exceed maxScrollback by evicting oldest entries. */
+    private fun enforceScrollbackCapacity() {
+        if (maxScrollback <= 0) return
+        val excess = scrollback.size - maxScrollback
+        if (excess > 0) repeat(excess) { scrollback.removeAt(0) }
+    }
+
+    /** Returns a new empty row sized to the current width. */
     private fun emptyRow(): MutableList<Cell> = MutableList(width) { Cell.EMPTY }
 
+    // Saves the current top visible row into scrollback (as an immutable snapshot), respecting capacity.
     private fun pushTopRowToScrollback() {
         if (height <= 0) return
-        // Save an immutable snapshot of the top row
         val top = screen.first().toList()
         if (maxScrollback > 0) {
             scrollback.add(top)
-            if (scrollback.size > maxScrollback) {
-                // Remove oldest entries beyond capacity
-                repeat(scrollback.size - maxScrollback) { scrollback.removeAt(0) }
-            }
+            enforceScrollbackCapacity()
         }
     }
 
+    // Shifts the visible screen content up by one row and appends a fresh empty row at the bottom.
     private fun scrollUpOneRow() {
         if (height <= 0) return
         screen.removeAt(0)
         screen.add(emptyRow())
     }
 
+    // Performs a scroll operation if the cursor has advanced beyond the last visible row.
     private fun scrollIfPastBottom() {
         if (cursor.row >= height) {
             if (height > 0) {
@@ -359,6 +407,7 @@ class TerminalBuffer(
         }
     }
 
+    // Validates that the given screen row index is within visible bounds.
     private fun checkRowIndex(row: Int) {
         if (row !in 0 until height) throw IndexOutOfBoundsException("row=$row height=$height")
     }
