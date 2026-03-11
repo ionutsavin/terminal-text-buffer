@@ -39,22 +39,6 @@ This project implements such a buffer with:
 - `DECISIONS.md` — architecture decisions, trade-offs, and known limitations
 - `build.gradle.kts`, `settings.gradle.kts` — Gradle build configuration
 
-## 4. Build and test
-Using Gradle (wrapper scripts included):
-- Run tests:
-  - Unix/macOS: `./gradlew test`
-  - Windows: `gradlew.bat test`
-
-The project uses JUnit 5; tests are located under `src/test/kotlin`.
-
-## 5. Run `Main.kt` for manual testing
-There is no dedicated Gradle `run` task configured. Use one of the following options:
-- In an IDE (recommended): open the project, locate `src/main/kotlin/Main.kt`, and run the `main` function.
-- From the command line using the Kotlin CLI (if installed):
-  1) Compile: `kotlinc -classpath ~/.m2/repository/org/jetbrains/kotlin/kotlin-stdlib/* -d build/classes` (adjust stdlib path as needed)
-  2) Or use Gradle to compile: `./gradlew build`
-  3) Run with the Kotlin runner, ensuring Kotlin stdlib and compiled classes are on the classpath, e.g.: `kotlin -classpath build/classes/kotlin/main:<path-to-kotlin-stdlib> org.example.MainKt`
-
 Note: Exact classpath values depend on your environment/installation. Using an IDE is typically the simplest way to run the demo.
 
 ## 6. Architecture details
