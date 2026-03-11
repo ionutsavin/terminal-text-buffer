@@ -84,11 +84,8 @@ class TerminalBufferTest {
         @Test
         fun `write only newlines scrolls correctly with no characters written`() {
             val tb = newBuffer(3, 2, sb = 5)
-            // Fill screen first so scrollback has content to verify
             tb.write("ABC\nDEF")
-            // Now force scroll with only newlines
             tb.write("\n\n")
-            // Screen rows should be blank (scrolled past), cursor on last row
             assertEquals(tb.height - 1, tb.getCursorRow())
             assertEquals(0, tb.getCursorCol())
         }
@@ -96,8 +93,8 @@ class TerminalBufferTest {
         @Test
         fun `write past last row scrolls screen top row moves to scrollback`() {
             val tb = newBuffer(3, 2, sb = 5)
-            tb.write("ABC\n") // cursor moves to row 1
-            tb.write("DEF")   // fills row 1, wraps to row 2, triggers scroll
+            tb.write("ABC\n")
+            tb.write("DEF")
             assertEquals('A', tb.getScrollbackCell(0, 0).char)
             assertEquals('B', tb.getScrollbackCell(0, 1).char)
             assertEquals('C', tb.getScrollbackCell(0, 2).char)
@@ -106,13 +103,10 @@ class TerminalBufferTest {
 
         @Test
         fun `write exactly filling screen without overflow does not go out of bounds`() {
-            // width=3, height=2 — writing exactly 6 chars should fill screen
-            // and leave cursor on last row without crashing
             val tb = newBuffer(3, 2, sb = 5)
             tb.write("ABCDEF")
             assertEquals("ABC", tb.getScreenLine(0))
             assertEquals("DEF", tb.getScreenLine(1))
-            // Cursor wraps after last char — triggers scroll, lands on row height-1
             assertEquals(tb.height - 1, tb.getCursorRow())
         }
 
@@ -139,9 +133,9 @@ class TerminalBufferTest {
         @Test
         fun `scrollback does not exceed maxScrollback oldest lines dropped`() {
             val tb = newBuffer(2, 1, sb = 2)
-            tb.write("AB\n") // scrollback: [AB]
-            tb.write("CD\n") // scrollback: [AB, CD]
-            tb.write("EF\n") // scrollback: [CD, EF] — AB evicted
+            tb.write("AB\n")
+            tb.write("CD\n")
+            tb.write("EF\n")
             assertDoesNotThrow { tb.getScrollbackCell(0, 0) }
             assertDoesNotThrow { tb.getScrollbackCell(1, 0) }
             assertThrows(IndexOutOfBoundsException::class.java) { tb.getScrollbackCell(2, 0) }
@@ -152,11 +146,9 @@ class TerminalBufferTest {
         @Test
         fun `write with maxScrollback zero discards scrolled lines silently`() {
             val tb = newBuffer(3, 1, sb = 0)
-            tb.write("ABC\n") // would scroll ABC into scrollback, but maxScrollback=0
+            tb.write("ABC\n")
             tb.write("DEF")
-            // No scrollback entries — accessing index 0 should throw
             assertThrows(IndexOutOfBoundsException::class.java) { tb.getScrollbackCell(0, 0) }
-            // Screen still works normally
             assertEquals("DEF", tb.getScreenLine(0))
         }
     }
@@ -299,15 +291,14 @@ class TerminalBufferTest {
         @Test
         fun `scrollback is read-only editing operations do not affect it`() {
             val tb = newBuffer(4, 2, sb = 100)
-            tb.write("WXYZ\n") // push WXYZ to scrollback
+            tb.write("WXYZ\n")
             val before = tb.getScrollbackLine(0)
-            // All edits stay on the screen without triggering another scroll
             tb.setCursor(0, 0)
             tb.fillLine(0, '*')
             tb.setCursor(0, 0)
             tb.insert("QQ")
             tb.setCursor(0, 0)
-            tb.write("AB") // short write, no newline, no scroll
+            tb.write("AB")
             val after = tb.getScrollbackLine(0)
             assertEquals(before, after)
         }

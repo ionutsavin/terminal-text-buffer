@@ -6,7 +6,6 @@ package com.terminal
  */
 enum class TerminalColor {
     DEFAULT,
-    // Standard 8 colors
     BLACK,
     RED,
     GREEN,
@@ -15,7 +14,6 @@ enum class TerminalColor {
     MAGENTA,
     CYAN,
     WHITE,
-    // Bright variants
     BRIGHT_BLACK,
     BRIGHT_RED,
     BRIGHT_GREEN,
