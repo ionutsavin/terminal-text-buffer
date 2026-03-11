@@ -40,6 +40,3 @@ This project implements such a buffer with:
 - `build.gradle.kts`, `settings.gradle.kts` — Gradle build configuration
 
 Note: Exact classpath values depend on your environment/installation. Using an IDE is typically the simplest way to run the demo.
-
-## 6. Architecture details
-See `DECISIONS.md` for rationale behind the design (screen vs. scrollback separation, immutability choices, insert semantics, data structure trade-offs, and known limitations).
